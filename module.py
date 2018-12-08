@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+from hyperparams import  Hyperparams as hp
 
 
 def normalize(inputs,
@@ -68,9 +69,9 @@ def embedding(inputs,
                                            initializer=tf.contrib.layers.xavier_initializer())
         # 导入外部词向量
         else:
-            lookup_table = lookup_table_source
+            lookup_table = tf.to_float(lookup_table_source)
         if zero_pad:
-            lookup_table = tf.concat((tf.zeros(shape=[1, num_units]), lookup_table))
+            lookup_table = tf.concat((tf.zeros(shape=[1, num_units]), lookup_table), axis=0)
         outputs = tf.nn.embedding_lookup(lookup_table, inputs)
         if scale:
             outputs = outputs * (num_units ** 0.5)
@@ -82,14 +83,17 @@ def positional_enconding(inputs,
                          num_units,
                          zero_pad=True,
                          strategy='sinusoidal',
+                         vocab_size=None,
                          scale=True,
                          scope='positional_encoding',
                          reuse=None):
     """Applies positional_encoding
+
     :param inputs: A tensor with shape of (batch_size, T)
     :param num_units:
     :param zero_pad:
     :param strategy:
+    :param vocab_size:
     :param scale:
     :param scope:
     :param reuse:
@@ -97,8 +101,10 @@ def positional_enconding(inputs,
     """
     with tf.variable_scope(scope, reuse=reuse):
         if strategy == 'sinusoidal':
+            # if
             batch_size, T = inputs.get_shape().as_list()
-            position_ind = tf.tile(tf.expand_dims(tf.range(T), 0), [batch_size, 1])
+            # position_ind = tf.tile(tf.expand_dims(tf.range(T), 0), [batch_size, 1])
+            position_ind = tf.tile(tf.expand_dims(tf.range(T), 0), [1, 1])
             position_enc = np.array([
                 [pos/(np.power(10000, 2*i/num_units)) for i in range(num_units)]
                 for pos in range(T)])
@@ -111,8 +117,16 @@ def positional_enconding(inputs,
             outputs = tf.nn.embedding_lookup(lookup_table, position_ind)
             if scale:
                 outputs = outputs * (num_units ** 0.5)
-
-        return outputs
+        elif strategy == 'learn':
+            outputs = embedding(tf.tile(tf.expand_dims(tf.range(tf.shape(inputs)[1]), 0), [tf.shape(inputs)[0], 1]),
+                                vocab_size=vocab_size,
+                                num_units=num_units,
+                                zero_pad=zero_pad,
+                                scale=scale,
+                                scope=scope)
+        else:
+            raise RuntimeError('on such type of positional encoding strategy.')
+        return tf.to_float(outputs)
 
 
 def multihead_attention(queries,
@@ -184,7 +198,9 @@ def multihead_attention(queries,
         outputs = tf.nn.softmax(outputs)
 
         # Query Masking
-        query_masks = tf.sign(tf.abs(tf.reduce_sum(queries)))  # (N, T_q)
+        query_masks = tf.sign(tf.abs(tf.reduce_sum(queries, axis=-1)))  # (N, T_q)
+        # print(tf.reduce_sum(queries))
+        # print(query_masks)
         query_masks = tf.tile(query_masks, [num_heads, 1])  # (h*N, T_q)
         query_masks = tf.tile(tf.expand_dims(query_masks, -1), [1, 1, tf.shape(keys)[1]])  # (h*N, T_q, T_k)
         outputs *= query_masks
@@ -242,10 +258,10 @@ def feedforward(inputs,
 def label_smoothing(inputs, epsilon=0.1):
     """Applies label smoothing. paper from: https://arxiv.org/abs/1512.00567.
 
-    :param inputs: 3D tensor with shape of [N, T, V], where V is the length of vocabulary
+    :param inputs: 3D tensor with shape of [N, T, V], where V is the num of classes.
     :param epsilon:
     :return:
     """
 
     num_channel = inputs.get_shape().as_list()[-1]
-    return (1-epsilon)*inputs + (epsilon / num_channel)
+    return (1-epsilon)*tf.to_float(inputs) + (epsilon / num_channel)
